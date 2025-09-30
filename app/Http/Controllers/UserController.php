@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Yajra\DataTables\Facades\DataTables;
 
@@ -16,32 +17,85 @@ class UserController extends Controller
     {
         return view('users.index');
     }
-
     public function getData(Request $request)
     {
-        $query = User::with('role:id,name');
+        // SELECT only required columns + map status to label
+        $query = DB::table('users')
+            ->select([
+                'users.id',
+                'users.name',
+                'users.email',
+                'users.status',
+                'users.created_at',
+                DB::raw("roles.name as role_name"),
+                DB::raw("CASE WHEN users.status = 1 THEN 'Active' ELSE 'Inactive' END as status_label")
+            ])
+            ->leftJoin('roles', 'roles.id', '=', 'users.role_id');
 
-        return DataTables::of($query)
-            ->addColumn('role_name', fn($user) => $user->role ? $user->role->name : 'No Role')
-            ->addColumn('status_select', function ($user) {
-                $selectedActive = $user->status === 'active' ? 'selected' : '';
-                $selectedInactive = $user->status === 'inactive' ? 'selected' : '';
-                return "
-                    <select class='form-control change-status' data-id='{$user->id}'>
-                        <option value='active' $selectedActive>Active</option>
-                        <option value='inactive' $selectedInactive>Inactive</option>
-                    </select>
-                ";
+        return DataTables::query($query)
+            ->addIndexColumn()
+            ->editColumn('created_at', function ($row) {
+                return date('Y-m-d', strtotime($row->created_at));
             })
-            ->addColumn('action', function ($user) {
-                return '<a href="' . route('users.edit', $user->id) . '" class="btn btn-sm btn-primary">Edit</a>';
+            // status_select: build dropdown HTML: value=0/1
+            ->addColumn('status_select', function ($row) {
+                $selectedActive = ($row->status == 1) ? 'selected' : '';
+                $selectedInactive = ($row->status == 0) ? 'selected' : '';
+                return "<select class='form-control change-status' data-id='{$row->id}'>
+                            <option value='1' {$selectedActive}>Active</option>
+                            <option value='0' {$selectedInactive}>Inactive</option>
+                        </select>";
+            })
+            ->addColumn('action', function ($row) {
+                $edit = route('users.edit', $row->id);
+                return "<a href='{$edit}' class='btn btn-sm btn-primary'>Edit</a>";
             })
             ->rawColumns(['status_select', 'action'])
-            ->filterColumn('status_select', function ($query, $keyword) {
-                $query->where('status', 'like', "%{$keyword}%");
+            // Custom filters: use prefix matching to leverage indexes
+            ->filterColumn('name', function ($query, $keyword) {
+                $query->where('users.name', 'like', $keyword . '%');
+            })
+            ->filterColumn('email', function ($query, $keyword) {
+                $query->where('users.email', 'like', $keyword . '%');
+            })
+            ->filterColumn('status_label', function ($query, $keyword) {
+                $k = strtolower($keyword);
+                if ($k === 'active')
+                    $query->where('users.status', 1);
+                if ($k === 'inactive')
+                    $query->where('users.status', 0);
             })
             ->make(true);
     }
+
+    // public function getData(Request $request)
+    // {
+    //     $query = User::with('role:id,name');
+
+    //     return DataTables::of($query)
+    //         // 🔹 Add index column
+    //         ->addIndexColumn()
+    //         ->addColumn('role_name', fn($user) => $user->role ? $user->role->name : 'No Role')
+    //         ->addColumn('status_select', function ($user) {
+    //             $selectedActive = $user->status === 'active' ? 'selected' : '';
+    //             $selectedInactive = $user->status === 'inactive' ? 'selected' : '';
+    //             return "
+    //                 <select class='form-control change-status' data-id='{$user->id}'>
+    //                     <option value='active' $selectedActive>Active</option>
+    //                     <option value='inactive' $selectedInactive>Inactive</option>
+    //                 </select>
+    //             ";
+    //         })
+    //         ->addColumn('action', function ($user) {
+    //             return '<a href="' . route('users.edit', $user->id) . '" class="btn btn-sm btn-primary">Edit</a>';
+    //         })
+    //         ->rawColumns(['status_select', 'action'])
+    //         ->filterColumn('status_select', function ($query, $keyword) {
+    //             $query->where('status', strtolower($keyword));
+    //         })
+
+    //         ->make(true);
+    // }
 
     public function updateStatus(Request $request)
     {
